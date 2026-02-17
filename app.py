@@ -5,110 +5,120 @@ import os
 import requests
 from model import GPTConfig, GPT
 
-# --- CONFIGURATION & THÈME ---
-st.set_page_config(page_title="UiT nanoGPT Chat", page_icon="🐦")
+# --- CONFIGURATION DE LA PAGE & THÈME ---
+st.set_page_config(page_title="UiT nanoGPT Storyteller", page_icon="🟢")
 
-# CSS pour le thème Light Green style ChatGPT
+# Style CSS pour le thème Light Green (ChatGPT Style)
 st.markdown("""
     <style>
-    .stApp { background-color: #f7fdf9; }
-    .stChatMessage { border-radius: 15px; padding: 10px; margin-bottom: 10px; }
-    .stChatMessage[data-testid="stChatMessageUser"] { background-color: #e8f5e9; border: 1px solid #c8e6c9; }
-    .stChatMessage[data-testid="stChatMessageAssistant"] { background-color: #ffffff; border: 1px solid #e0e0e0; }
-    .stButton>button { background-color: #4caf50; color: white; border-radius: 20px; }
+    .stApp { background-color: #f0fdf4; } 
+    [data-testid="stSidebar"] { background-color: #dcfce7; }
+    .stChatMessage[data-testid="stChatMessageUser"] { background-color: #bbf7d0; border-radius: 15px; }
+    .stChatMessage[data-testid="stChatMessageAssistant"] { background-color: #ffffff; border-radius: 15px; border: 1px solid #e2e8f0; }
+    .stButton>button { background-color: #22c55e; color: white; border-radius: 20px; border: none; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CHARGEMENT DU MODÈLE ---
+# --- CONFIGURATION DU MODÈLE ---
 FILE_ID = '1rLJSJQwdvRhRS8KdYjffTM-jkhPM0zGr'
 CKPT_PATH = 'ckpt.pt'
 
 @st.cache_resource
 def download_and_load_model():
     if not os.path.exists(CKPT_PATH):
-        with st.spinner("Downloading model (218MB) from Google Drive..."):
-            # Nouvelle méthode pour contourner l'avertissement "fichier volumineux"
-            def get_confirm_token(response):
-                for key, value in response.cookies.items():
-                    if key.startswith('download_warning'):
-                        return value
-                return None
-
-            def save_response_content(response, destination):
-                CHUNK_SIZE = 32768
-                with open(destination, "wb") as f:
-                    for chunk in response.iter_content(CHUNK_SIZE):
-                        if chunk: 
-                            f.write(chunk)
-
+        with st.spinner("Récupération du modèle (218 Mo)... Google Drive demande une confirmation antivirus."):
             URL = "https://docs.google.com/uc?export=download"
             session = requests.Session()
+            # Première requête pour obtenir le cookie de confirmation
             response = session.get(URL, params={'id': FILE_ID}, stream=True)
-            token = get_confirm_token(response)
-
-            if token:
-                params = {'id': FILE_ID, 'confirm': token}
-                response = session.get(URL, params=params, stream=True)
             
-            save_response_content(response, CKPT_PATH)
+            token = None
+            for key, value in response.cookies.items():
+                if key.startswith('download_warning'):
+                    token = value
+                    break
+            
+            # Si un jeton est trouvé, on relance la requête avec la confirmation
+            if token:
+                response = session.get(URL, params={'id': FILE_ID, 'confirm': token}, stream=True)
+            
+            # Écriture du fichier par morceaux (chunks)
+            with open(CKPT_PATH, "wb") as f:
+                for chunk in response.iter_content(32768):
+                    if chunk: f.write(chunk)
 
-    # Vérification : si le fichier est tout petit, c'est qu'il y a eu un souci
-    if os.path.getsize(CKPT_PATH) < 1000000: # moins de 1Mo
-        os.remove(CKPT_PATH)
-        st.error("Erreur de téléchargement : le fichier est corrompu ou Google bloque l'accès.")
+    # Vérification : si le fichier est corrompu ou incomplet
+    if os.path.getsize(CKPT_PATH) < 100000000: # Doit faire plus de 100Mo
+        st.error("❌ Le téléchargement a échoué. Google Drive bloque peut-être l'accès.")
+        if os.path.exists(CKPT_PATH): os.remove(CKPT_PATH)
         return None
 
-    checkpoint = torch.load(CKPT_PATH, map_location='cpu')
-    config = GPTConfig(**checkpoint['model_args'])
-    model = GPT(config)
-    
-    state_dict = checkpoint['model']
-    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-    
-    model.load_state_dict(state_dict)
-    model.eval()
-    return model
-    
-# --- CHARGEMENT DES METADATA ---
-with open('meta.pkl', 'rb') as f:
-    meta = pickle.load(f)
-stoi, itos = meta['stoi'], meta['itos']
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: ''.join([itos[i] for i in l])
+    try:
+        checkpoint = torch.load(CKPT_PATH, map_location='cpu')
+        config = GPTConfig(**checkpoint['model_args'])
+        model = GPT(config)
+        state_dict = checkpoint['model']
+        # Nettoyage automatique des préfixes 'compile'
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des poids : {e}")
+        return None
 
+# --- CHARGEMENT DES COMPOSANTS ---
 model = download_and_load_model()
 
-# --- INTERFACE ---
+if model is None:
+    st.warning("⚠️ L'application ne peut pas démarrer sans le modèle. Rafraîchissez la page.")
+    st.stop()
+
+# Chargement du dictionnaire meta.pkl (doit être sur ton GitHub)
+try:
+    with open('meta.pkl', 'rb') as f:
+        meta = pickle.load(f)
+    stoi, itos = meta['stoi'], meta['itos']
+    encode = lambda s: [stoi[c] for c in s if c in stoi]
+    decode = lambda l: ''.join([itos[i] for i in l])
+except FileNotFoundError:
+    st.error("❌ Fichier 'meta.pkl' introuvable dans le dépôt GitHub.")
+    st.stop()
+
+# --- INTERFACE UTILISATEUR ---
 st.title("🟢 UiT nanoGPT Storyteller")
-st.caption("Modèle : Depth-24 layers | Dataset : TinyStories")
+st.caption("Architecture 24-layers entraînée sur TinyStories par Arthur PREVEL")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Sidebar pour les réglages
 with st.sidebar:
-    st.header("Settings")
-    temp = st.slider("Creativity (Temperature)", 0.1, 1.5, 0.8)
-    tokens = st.slider("Story Length", 50, 500, 200)
+    st.header("Paramètres")
+    temp = st.slider("Créativité (Température)", 0.1, 1.2, 0.8)
+    max_t = st.slider("Longueur de l'histoire", 50, 500, 200)
+    if st.button("Nouvelle discussion"):
+        st.session_state.messages = []
+        st.rerun()
 
-# Affichage de l'historique
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# Affichage des messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# Entrée utilisateur
-if prompt := st.chat_input("Write the start of a story..."):
+# Entrée du prompt
+if prompt := st.chat_input("Il était une fois..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Génération
     with st.chat_message("assistant"):
-        input_ids = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
-        with st.spinner("Writing..."):
-            # Simulation de génération (Remplace par ta fonction model.generate)
-            y = model.generate(input_ids, tokens, temperature=temp)[0].tolist()
-            response = decode(y)
+        with st.spinner("Génération en cours..."):
+            # Encodage et génération par le modèle
+            context_ids = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
+            # Appel de ta fonction de génération nanoGPT
+            output_ids = model.generate(context_ids, max_new_tokens=max_t, temperature=temp)[0].tolist()
+            response = decode(output_ids)
             st.markdown(response)
-            
+    
     st.session_state.messages.append({"role": "assistant", "content": response})
