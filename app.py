@@ -25,28 +25,50 @@ CKPT_PATH = 'ckpt.pt'
 
 @st.cache_resource
 def download_and_load_model():
-    # Téléchargement si le fichier n'existe pas
     if not os.path.exists(CKPT_PATH):
-        with st.spinner("Downloading model (218MB)... This might take a minute."):
-            url = f'https://drive.google.com/uc?id={FILE_ID}'
-            response = requests.get(url, stream=True)
-            with open(CKPT_PATH, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+        with st.spinner("Downloading model (218MB) from Google Drive..."):
+            # Nouvelle méthode pour contourner l'avertissement "fichier volumineux"
+            def get_confirm_token(response):
+                for key, value in response.cookies.items():
+                    if key.startswith('download_warning'):
+                        return value
+                return None
 
-    # Chargement
+            def save_response_content(response, destination):
+                CHUNK_SIZE = 32768
+                with open(destination, "wb") as f:
+                    for chunk in response.iter_content(CHUNK_SIZE):
+                        if chunk: 
+                            f.write(chunk)
+
+            URL = "https://docs.google.com/uc?export=download"
+            session = requests.Session()
+            response = session.get(URL, params={'id': FILE_ID}, stream=True)
+            token = get_confirm_token(response)
+
+            if token:
+                params = {'id': FILE_ID, 'confirm': token}
+                response = session.get(URL, params=params, stream=True)
+            
+            save_response_content(response, CKPT_PATH)
+
+    # Vérification : si le fichier est tout petit, c'est qu'il y a eu un souci
+    if os.path.getsize(CKPT_PATH) < 1000000: # moins de 1Mo
+        os.remove(CKPT_PATH)
+        st.error("Erreur de téléchargement : le fichier est corrompu ou Google bloque l'accès.")
+        return None
+
     checkpoint = torch.load(CKPT_PATH, map_location='cpu')
     config = GPTConfig(**checkpoint['model_args'])
     model = GPT(config)
     
     state_dict = checkpoint['model']
-    # Nettoyage des préfixes torch.compile si nécessaire
     state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
     
     model.load_state_dict(state_dict)
     model.eval()
     return model
-
+    
 # --- CHARGEMENT DES METADATA ---
 with open('meta.pkl', 'rb') as f:
     meta = pickle.load(f)
