@@ -2,13 +2,13 @@ import streamlit as st
 import torch
 import pickle
 import os
-import requests
+from huggingface_hub import hf_hub_download
 from model import GPTConfig, GPT
 
 # --- CONFIGURATION DE LA PAGE & THÈME ---
 st.set_page_config(page_title="UiT nanoGPT Storyteller", page_icon="🟢")
 
-# Style CSS pour le thème Light Green (ChatGPT Style)
+# Style CSS pour le thème Light Green
 st.markdown("""
     <style>
     .stApp { background-color: #f0fdf4; } 
@@ -19,59 +19,36 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONFIGURATION DU MODÈLE ---
-FILE_ID = '1rLJSJQwdvRhRS8KdYjffTM-jkhPM0zGr'
-CKPT_PATH = 'ckpt.pt'
+# --- CONFIGURATION HUGGING FACE ---
+REPO_ID = "Arthur-PREVEL/nanogpt-tinystories-depth24" 
+FILENAME = "ckpt.pt"
 
 @st.cache_resource
-def download_and_load_model():
-    if not os.path.exists(CKPT_PATH):
-        with st.spinner("Récupération du modèle (218 Mo)... Google Drive demande une confirmation antivirus."):
-            URL = "https://docs.google.com/uc?export=download"
-            session = requests.Session()
-            # Première requête pour obtenir le cookie de confirmation
-            response = session.get(URL, params={'id': FILE_ID}, stream=True)
-            
-            token = None
-            for key, value in response.cookies.items():
-                if key.startswith('download_warning'):
-                    token = value
-                    break
-            
-            # Si un jeton est trouvé, on relance la requête avec la confirmation
-            if token:
-                response = session.get(URL, params={'id': FILE_ID, 'confirm': token}, stream=True)
-            
-            # Écriture du fichier par morceaux (chunks)
-            with open(CKPT_PATH, "wb") as f:
-                for chunk in response.iter_content(32768):
-                    if chunk: f.write(chunk)
-
-    # Vérification : si le fichier est corrompu ou incomplet
-    if os.path.getsize(CKPT_PATH) < 100000000: # Doit faire plus de 100Mo
-        st.error("❌ Le téléchargement a échoué. Google Drive bloque peut-être l'accès.")
-        if os.path.exists(CKPT_PATH): os.remove(CKPT_PATH)
-        return None
-
+def load_model_from_hf():
     try:
-        checkpoint = torch.load(CKPT_PATH, map_location='cpu')
-        config = GPTConfig(**checkpoint['model_args'])
-        model = GPT(config)
-        state_dict = checkpoint['model']
-        # Nettoyage automatique des préfixes 'compile'
-        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
+        with st.spinner("Chargement du modèle depuis Hugging Face (218 Mo)..."):
+            # Téléchargement sécurisé via Hugging Face Hub
+            path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
+            
+            checkpoint = torch.load(path, map_location='cpu')
+            config = GPTConfig(**checkpoint['model_args'])
+            model = GPT(config)
+            
+            state_dict = checkpoint['model']
+            # Nettoyage des préfixes 'compile'
+            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+            model.load_state_dict(state_dict)
+            model.eval()
+            return model
     except Exception as e:
-        st.error(f"Erreur lors du chargement des poids : {e}")
+        st.error(f"Erreur lors du téléchargement depuis Hugging Face : {e}")
         return None
 
-# --- CHARGEMENT DES COMPOSANTS ---
-model = download_and_load_model()
+# --- CHARGEMENT ---
+model = load_model_from_hf()
 
 if model is None:
-    st.warning("⚠️ L'application ne peut pas démarrer sans le modèle. Rafraîchissez la page.")
+    st.warning("⚠️ Impossible de charger le modèle. Vérifiez la connexion à Hugging Face.")
     st.stop()
 
 # Chargement du dictionnaire meta.pkl (doit être sur ton GitHub)
@@ -82,12 +59,12 @@ try:
     encode = lambda s: [stoi[c] for c in s if c in stoi]
     decode = lambda l: ''.join([itos[i] for i in l])
 except FileNotFoundError:
-    st.error("❌ Fichier 'meta.pkl' introuvable dans le dépôt GitHub.")
+    st.error("❌ Fichier 'meta.pkl' introuvable dans ton dépôt GitHub.")
     st.stop()
 
 # --- INTERFACE UTILISATEUR ---
 st.title("🟢 UiT nanoGPT Storyteller")
-st.caption("Architecture 24-layers entraînée sur TinyStories par Arthur PREVEL")
+st.caption("Architecture 24-layers | TinyStories Dataset | Par Arthur PREVEL")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -96,8 +73,8 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("Paramètres")
     temp = st.slider("Créativité (Température)", 0.1, 1.2, 0.8)
-    max_t = st.slider("Longueur de l'histoire", 50, 500, 200)
-    if st.button("Nouvelle discussion"):
+    max_t = st.slider("Longueur max (Tokens)", 50, 500, 200)
+    if st.button("🔄 Nouvelle discussion"):
         st.session_state.messages = []
         st.rerun()
 
@@ -113,10 +90,9 @@ if prompt := st.chat_input("Il était une fois..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Génération en cours..."):
-            # Encodage et génération par le modèle
+        with st.spinner("Génération..."):
             context_ids = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
-            # Appel de ta fonction de génération nanoGPT
+            # Appel de la fonction de génération de ton modèle
             output_ids = model.generate(context_ids, max_new_tokens=max_t, temperature=temp)[0].tolist()
             response = decode(output_ids)
             st.markdown(response)
