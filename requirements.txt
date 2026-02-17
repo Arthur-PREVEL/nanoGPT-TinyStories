@@ -1,3 +1,5 @@
 streamlit
 torch
 numpy
+requests
+huggingface_hub
