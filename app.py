@@ -2,12 +2,11 @@ import streamlit as st
 import torch
 import pickle
 import time
-import datetime
 from huggingface_hub import hf_hub_download
 from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURATION & STYLE
+# 1. PAGE CONFIG & CSS (THEME FIX)
 # -----------------------------------------------------------------------------
 
 st.set_page_config(
@@ -16,220 +15,203 @@ st.set_page_config(
     layout="centered"
 )
 
-# CSS "Clean Interface" inspiré de Snowflake mais avec l'identité UiT
 st.markdown("""
     <style>
-    /* Fond global très propre */
-    .stApp { background-color: #ffffff; }
-    
-    /* Suppression du padding haut pour un look 'App' */
-    .block-container { padding-top: 3rem; }
-
-    /* Style des bulles de chat */
-    .stChatMessage { 
-        padding: 1rem; 
-        border-radius: 12px; 
-        margin-bottom: 1rem; 
+    /* 1. FORCE TEXT COLOR TO DARK GLOBALLY (Fixes the white-on-white issue) */
+    .stApp, .stMarkdown, .stText, p, h1, h2, h3, li, span {
+        color: #0f172a !important; /* Dark Slate Blue (Almost Black) */
+        font-family: 'Source Sans Pro', sans-serif;
     }
+
+    /* 2. BACKGROUNDS */
+    .stApp { background-color: #ffffff; } /* White Background */
+    [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
+
+    /* 3. CHAT BUBBLES */
     
-    /* Bulle Utilisateur : Vert UiT Professionnel */
+    /* User Bubble (Green) */
     [data-testid="stChatMessageUser"] { 
         background-color: #059669; 
+        border: none;
     }
-    /* Texte utilisateur en blanc */
-    [data-testid="stChatMessageUser"] p { color: white !important; }
+    /* Force User Text to White */
+    [data-testid="stChatMessageUser"] p, [data-testid="stChatMessageUser"] span { 
+        color: #ffffff !important; 
+    }
 
-    /* Bulle Assistant : Gris très léger (Style ChatGPT/Claude) */
+    /* Assistant Bubble (Light Gray) */
     [data-testid="stChatMessageAssistant"] { 
-        background-color: #f8fafc; 
+        background-color: #f1f5f9; 
         border: 1px solid #e2e8f0;
     }
-    /* Texte assistant en noir/gris foncé */
-    [data-testid="stChatMessageAssistant"] p { color: #1e293b !important; }
 
-    /* Titres et Labels */
-    h1, h2, h3 { color: #064e3b !important; font-family: 'Helvetica', sans-serif; }
+    /* 4. DIALOG / MODAL FIX */
+    div[data-testid="stDialog"] {
+        background-color: #ffffff;
+    }
+    div[data-testid="stDialog"] p, div[data-testid="stDialog"] h3 {
+        color: #0f172a !important;
+    }
+
+    /* 5. UI ELEMENTS */
+    .stButton>button { border-radius: 8px; font-weight: 500; }
+    div[data-baseweb="select"] > div { border-radius: 8px; }
     
-    /* Input field stylisé */
-    .stChatInput > div { border-color: #cbd5e1 !important; }
+    /* Hide default header decoration */
+    header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONSTANTES & DONNÉES
+# 2. CONSTANTS
 # -----------------------------------------------------------------------------
 
 REPO_ID = "Arthur-PREVEL/nanogpt-tinystories-depth24" 
 FILENAME = "ckpt.pt"
 
-# Suggestions affichées au démarrage (Pills)
 SUGGESTIONS = {
-    "🐶 A dog named Max": "Once upon a time, there was a dog named Max who loved to...",
-    "🏰 The Magic Castle": "Lily found a secret door that led to a big, shining castle...",
-    "🍪 The Lost Cookie": "Tom was sad because he lost his favorite cookie in the...",
-    "🤖 The Happy Robot": "A little robot wanted to make friends, so he went to the...",
+    "Magic": "Tim found a magic ball in the garden. He picked it up and...",
+    "Forest": "Lily was walking through the big green forest when she saw a...",
+    "Robot": "In a small house, there lived a robot named Ben. Ben wanted to...",
+    "Rain": "It was a rainy day. Sue was sad because she could not go outside...",
 }
 
 # -----------------------------------------------------------------------------
-# 3. CHARGEMENT DU MODÈLE (BACKEND)
+# 3. BACKEND (MODEL LOADING)
 # -----------------------------------------------------------------------------
 
 @st.cache_resource
-def load_resources():
+def load_engine():
     try:
-        # Téléchargement & Chargement Modèle
+        # Load Model
         path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
         checkpoint = torch.load(path, map_location='cpu')
         config = GPTConfig(**checkpoint['model_args'])
         model = GPT(config)
-        
-        state_dict = checkpoint['model']
-        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in checkpoint['model'].items()}
         model.load_state_dict(state_dict)
         model.eval()
 
-        # Chargement Meta (Tokenization)
+        # Load Meta (Tokenizer)
         with open('meta.pkl', 'rb') as f:
             meta = pickle.load(f)
-        
         return model, meta['stoi'], meta['itos']
     except Exception as e:
         return None, None, None
 
-model, stoi, itos = load_resources()
+model, stoi, itos = load_engine()
 
-# Helpers pour encoder/decoder
-if stoi and itos:
-    encode = lambda s: [stoi[c] for c in s if c in stoi]
-    decode = lambda l: ''.join([itos[i] for i in l])
-else:
-    st.error("Erreur critique: Impossible de charger le modèle ou meta.pkl")
+if not model:
+    st.error("❌ Error: Could not load model. Check internet connection or 'meta.pkl'.")
     st.stop()
 
+encode = lambda s: [stoi[c] for c in s if c in stoi]
+decode = lambda l: ''.join([itos[i] for i in l])
+
+def generate_text(prompt, max_tokens, temp):
+    context = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
+    out = model.generate(context, max_new_tokens=max_tokens, temperature=temp)[0].tolist()
+    return decode(out)
+
 # -----------------------------------------------------------------------------
-# 4. FONCTIONS UTILITAIRES UI
+# 4. SIDEBAR (CONTROLS & INFO)
 # -----------------------------------------------------------------------------
 
-def clear_conversation():
-    st.session_state.messages = []
-    st.session_state.selected_suggestion = None
-
-@st.dialog("Project Disclaimers")
-def show_disclaimer():
-    st.write("### INF-3600 Project Info")
-    st.caption("""
-    This AI assistant uses a **24-layer Transformer** trained from scratch on the **TinyStories** dataset.
+with st.sidebar:
+    st.header("⚙️ Settings")
     
-    * **Capabilities:** Generates simple narratives with coherent structure.
-    * **Limitations:** May exhibit hallucinations or grammatical loops typical of small language models (18M params).
-    * **Privacy:** No data is stored externally. Everything runs in ephemeral memory.
+    # Sliders for Control
+    max_tokens = st.slider("Story Length (Tokens)", 50, 500, 250, step=10)
+    temperature = st.slider("Creativity (Temperature)", 0.1, 1.2, 0.8, step=0.1)
     
-    *Author: Arthur PREVEL - UiT The Arctic University of Norway*
-    """)
-
-# Simulation de streaming pour l'effet visuel "Claude/ChatGPT"
-def stream_text(full_text):
-    for word in full_text.split(" "):
-        yield word + " "
-        time.sleep(0.02) # Vitesse d'écriture
+    st.divider()
+    
+    # Project Info Button (Opens Dialog)
+    @st.dialog("📋 Project Information")
+    def show_info():
+        st.markdown("""
+        ### Scaling Laws in Small Language Models
+        
+        **Model Architecture:**
+        * **Type:** Transformer (Decoder-only)
+        * **Depth:** 24 Layers
+        * **Parameters:** ~18.95 Million
+        * **Dataset:** TinyStories
+        
+        **Context:**
+        This model demonstrates that **depth** (number of layers) is the primary driver for narrative logic and consistency in small models, outperforming wider but shallower architectures.
+        
+        *Author: Arthur PREVEL - UiT*
+        """)
+    
+    if st.button("ℹ️ About this Model", use_container_width=True):
+        show_info()
+        
+    if st.button("🗑️ Clear Chat", type="primary", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. INTERFACE PRINCIPALE
+# 5. MAIN INTERFACE
 # -----------------------------------------------------------------------------
 
-# Initialisation de l'état
+# Init History
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- HEADER ---
-# On affiche un header différent si c'est la page d'accueil ou si le chat est actif
-has_history = len(st.session_state.messages) > 0
+# --- HERO SECTION (If Empty) ---
+if not st.session_state.messages:
+    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #059669 !important;'>UiT nanoGPT</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #64748b !important; font-size: 1.2rem;'>A 24-layer Transformer trained on TinyStories.</p>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 30px;'></div>", unsafe_allow_html=True)
 
-if has_history:
-    col1, col2 = st.columns([6, 1])
-    col1.title("🟢 nanoGPT Assistant")
-    col2.button("Restart", icon="🔄", on_click=clear_conversation, use_container_width=True)
-else:
-    # Grand logo pour l'état vide
-    st.markdown("<div style='text-align: center; margin-bottom: 2rem; font-size: 4rem;'>✨</div>", unsafe_allow_html=True)
-    st.markdown("<h1 style='text-align: center;'>How can I help you write today?</h1>", unsafe_allow_html=True)
+# --- CHAT DISPLAY ---
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# --- ZONE D'AFFICHAGE DU CHAT ---
-if has_history:
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+# --- INPUT HANDLING ---
+user_input = st.chat_input("Write the start of a story...")
 
-# --- INPUT & LOGIQUE DE DÉMARRAGE ---
+# Pills Logic (Only show if empty)
+selected_pill = None
+if not st.session_state.messages:
+    # Using columns to center the pills visually
+    c1, c2, c3 = st.columns([1, 6, 1])
+    with c2:
+        selected_key = st.pills("Try a starter:", options=SUGGESTIONS.keys(), selection_mode="single")
+        if selected_key:
+            selected_pill = SUGGESTIONS[selected_key]
 
-# Gestion des suggestions (Pills)
-user_prompt = None
-selected_suggestion = None
+# --- EXECUTION LOGIC ---
+final_prompt = user_input if user_input else selected_pill
 
-# Si pas d'historique, on affiche les suggestions au milieu
-if not has_history:
-    st.write("") # Spacer
-    st.write("") 
-    
-    # Input field central
-    user_prompt = st.chat_input("Start a story...", key="main_input")
-    
-    # Suggestions sous l'input
-    selected_suggestion = st.pills(
-        "Try these examples:",
-        options=SUGGESTIONS.keys(),
-        selection_mode="single"
-    )
-    
-    # Bouton Disclaimer discret
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_c1, col_c2, col_c3 = st.columns([1, 2, 1])
-    with col_c2:
-        if st.button("ℹ️ Model Architecture & Info", type="tertiary", use_container_width=True):
-            show_disclaimer()
-
-# Si historique, l'input est géré par Streamlit automatiquement en bas, 
-# mais on doit récupérer la valeur si c'est un prompt "suivi"
-if has_history:
-    user_prompt = st.chat_input("Continue the story...")
-
-# --- LOGIQUE DE TRAITEMENT ---
-
-# Priorité : Input texte > Suggestion cliquée
-final_prompt = None
-if user_prompt:
-    final_prompt = user_prompt
-elif selected_suggestion and not has_history:
-    # Si on clique sur une pilule, on prend le texte associé
-    final_prompt = SUGGESTIONS[selected_suggestion]
-
-# Exécution
 if final_prompt:
-    # 1. Affichage User
+    # 1. User Message
     st.session_state.messages.append({"role": "user", "content": final_prompt})
-    if not has_history:
-        st.rerun() # Pour rafraîchir l'interface et passer en mode "Chat"
-    else:
-        with st.chat_message("user"):
-            st.markdown(final_prompt)
+    with st.chat_message("user"):
+        st.markdown(final_prompt)
 
-    # 2. Génération Bot
+    # 2. Assistant Generation
     with st.chat_message("assistant"):
-        with st.spinner("Generating narrative structure..."):
-            # Encodage
-            context_ids = torch.tensor(encode(final_prompt), dtype=torch.long)[None, ...]
+        placeholder = st.empty()
+        full_text = ""
+        
+        with st.spinner("Dreaming up a story..."):
+            # Run Inference
+            generated_text = generate_text(final_prompt, max_tokens, temperature)
             
-            # Génération (Temperature basse pour la démo clean)
-            output_ids = model.generate(context_ids, max_new_tokens=300, temperature=0.2)[0].tolist()
-            full_response = decode(output_ids)
-            
-            # Affichage en streaming
-            response_placeholder = st.empty()
-            streamed_text = ""
-            for chunk in stream_text(full_response):
-                streamed_text += chunk
-                response_placeholder.markdown(streamed_text + "▌")
-            
-            response_placeholder.markdown(full_response)
+            # Simple Streaming Effect
+            for word in generated_text.split():
+                full_text += word + " "
+                placeholder.markdown(full_text + "▌")
+                time.sleep(0.03) 
+                
+            placeholder.markdown(full_text)
     
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+    st.session_state.messages.append({"role": "assistant", "content": full_text})
+    
+    # Rerun to remove pills if they were just clicked
+    if selected_pill:
+        st.rerun()
