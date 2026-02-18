@@ -1,5 +1,5 @@
-streamlit
+streamlit>=1.40.0
 torch
 numpy
-requests
 huggingface_hub
+requests
