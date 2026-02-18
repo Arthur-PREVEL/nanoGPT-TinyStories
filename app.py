@@ -8,73 +8,76 @@ from model import GPTConfig, GPT
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="UiT nanoGPT Storyteller", page_icon="🟢")
 
-# Custom CSS for high-contrast "Emerald Night" theme
+# --- HIGH-CONTRAST CSS THEME ---
 st.markdown("""
     <style>
-    /* Very light green background for the page */
+    /* Main page background: Clean light slate */
     .stApp { 
+        background-color: #f8fafc; 
+    }
+    
+    /* Sidebar: Pale green */
+    [data-testid="stSidebar"] { 
         background-color: #f0fdf4; 
     }
-    
-    /* Sidebar styling */
-    [data-testid="stSidebar"] { 
-        background-color: #dcfce7; 
-    }
 
-    /* Force all chat text to white for contrast */
-    .stChatMessage p, .stChatMessage span {
+    /* Target all text inside chat bubbles to be pure white and bold */
+    [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] span {
         color: #ffffff !important;
-        font-weight: 400;
+        font-size: 1.05rem;
     }
 
-    /* User Message "Box": Dark Emerald Green */
-    .stChatMessage[data-testid="stChatMessageUser"] { 
-        background-color: #064e3b !important; 
-        border-radius: 15px;
-        padding: 15px;
-        margin-bottom: 10px;
-    }
-
-    /* Bot Message "Box": Forest Green */
-    .stChatMessage[data-testid="stChatMessageAssistant"] { 
+    /* User Message Box: Bold Emerald Green */
+    [data-testid="stChatMessageUser"] { 
         background-color: #059669 !important; 
         border-radius: 15px;
-        padding: 15px;
-        margin-bottom: 10px;
-        border: 1px solid #047857;
+        padding: 20px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
 
-    /* Make headers and slider labels dark green for visibility */
+    /* Bot Message Box: Deep Forest Green (Absolute Contrast) */
+    [data-testid="stChatMessageAssistant"] { 
+        background-color: #064e3b !important; 
+        border-radius: 15px;
+        padding: 20px;
+        border: 1px solid #065f46;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    /* External text (Title, Labels): Dark Forest Green */
     h1, h2, h3, label, .stMarkdown {
-        color: #064e3b;
+        color: #064e3b !important;
+        font-weight: 600;
     }
     
-    /* Green sidebar button */
+    /* Sidebar Buttons */
     .stButton>button {
         background-color: #10b981;
         color: white;
-        border-radius: 10px;
+        border-radius: 8px;
         border: none;
+        width: 100%;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- HUGGING FACE SETUP ---
+# --- MODEL LOADING LOGIC ---
 REPO_ID = "Arthur-PREVEL/nanogpt-tinystories-depth24" 
 FILENAME = "ckpt.pt"
 
 @st.cache_resource
-def load_model_from_hf():
+def load_model():
     try:
-        with st.spinner("Downloading weights from Hugging Face Hub..."):
+        with st.spinner("Initializing 24-layer Model..."):
+            # Fetch weights from Hugging Face
             path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
             checkpoint = torch.load(path, map_location='cpu')
             
-            # Reconstruct model from checkpoint args
+            # Reconstruct architecture
             config = GPTConfig(**checkpoint['model_args'])
             model = GPT(config)
             
-            # Remove 'compile' prefixes if present
+            # Remove potential torch.compile prefixes
             state_dict = checkpoint['model']
             state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
             
@@ -82,15 +85,13 @@ def load_model_from_hf():
             model.eval()
             return model
     except Exception as e:
-        st.error(f"Failed to load model: {e}")
+        st.error(f"Hardware/Network Error: {e}")
         return None
 
-# Initialization
-model = load_model_from_hf()
-if model is None:
-    st.stop()
+# Load model and character mapping
+model = load_model()
+if model is None: st.stop()
 
-# Load meta.pkl for character encoding/decoding
 try:
     with open('meta.pkl', 'rb') as f:
         meta = pickle.load(f)
@@ -98,43 +99,43 @@ try:
     encode = lambda s: [stoi[c] for c in s if c in stoi]
     decode = lambda l: ''.join([itos[i] for i in l])
 except FileNotFoundError:
-    st.error("Missing 'meta.pkl' in the repository!")
+    st.error("Error: meta.pkl missing from GitHub repository.")
     st.stop()
 
-# --- CHAT INTERFACE ---
+# --- CHAT ENGINE ---
 st.title("🟢 UiT nanoGPT Storyteller")
-st.write("Using a 24-layer depth model trained on the TinyStories dataset.")
+st.write("Depth-24 Transformer Model | Character-Level Infrerence")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Sidebar Controls
 with st.sidebar:
-    st.header("Parameters")
-    # Low temperature (0.1) provides stable, logical text generation
-    temp = st.slider("Creativity (Temperature)", 0.1, 1.2, 0.1) 
-    max_t = st.slider("Story Length (Tokens)", 50, 500, 250)
-    if st.button("🔄 Reset Chat"):
+    st.header("Model Parameters")
+    # Low temperature (0.1) prevents logical collapse
+    temp = st.slider("Temperature (Creativity)", 0.1, 1.2, 0.1) 
+    max_t = st.slider("Max Story Length (Tokens)", 50, 500, 250)
+    if st.button("🔄 Clear Chat History"):
         st.session_state.messages = []
         st.rerun()
 
-# Display conversation history
+# Render Chat History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# User prompt
-if prompt := st.chat_input("Enter the start of a story..."):
+# User Interaction
+if prompt := st.chat_input("Start a story (e.g., 'Once upon a time...')"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Generating story..."):
-            # Prepare context and generate tokens
-            context_ids = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
-            output_ids = model.generate(context_ids, max_new_tokens=max_t, temperature=temp)[0].tolist()
-            response = decode(output_ids)
+        with st.spinner("Synthesizing narrative..."):
+            # Process input and generate new tokens
+            context = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
+            output = model.generate(context, max_t, temperature=temp)[0].tolist()
+            response = decode(output)
             st.markdown(response)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
