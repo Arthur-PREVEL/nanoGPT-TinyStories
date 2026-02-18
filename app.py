@@ -5,53 +5,90 @@ import os
 from huggingface_hub import hf_hub_download
 from model import GPTConfig, GPT
 
-# --- CONFIGURATION DE LA PAGE & THÈME ---
+# --- PAGE CONFIGURATION & THEME ---
 st.set_page_config(page_title="UiT nanoGPT Storyteller", page_icon="🟢")
 
-# Style CSS pour le thème Light Green
+# Custom CSS for the "Full Green" theme with white text for chat messages
 st.markdown("""
     <style>
-    .stApp { background-color: #f0fdf4; } 
-    [data-testid="stSidebar"] { background-color: #dcfce7; }
-    .stChatMessage[data-testid="stChatMessageUser"] { background-color: #bbf7d0; border-radius: 15px; }
-    .stChatMessage[data-testid="stChatMessageAssistant"] { background-color: #ffffff; border-radius: 15px; border: 1px solid #e2e8f0; }
-    .stButton>button { background-color: #22c55e; color: white; border-radius: 20px; border: none; }
+    /* Light green main background */
+    .stApp { 
+        background-color: #f0fdf4; 
+    }
+    
+    /* Pale green sidebar */
+    [data-testid="stSidebar"] { 
+        background-color: #dcfce7; 
+    }
+
+    /* Force chat message text to white */
+    .stChatMessage p {
+        color: white !important;
+    }
+
+    /* User Bubble: Deep Emerald */
+    .stChatMessage[data-testid="stChatMessageUser"] { 
+        background-color: #065f46; 
+        border-radius: 15px;
+        padding: 15px;
+    }
+
+    /* Assistant Bubble: Forest Green */
+    .stChatMessage[data-testid="stChatMessageAssistant"] { 
+        background-color: #059669; 
+        border-radius: 15px;
+        padding: 15px;
+        border: 1px solid #047857;
+    }
+
+    /* Keep headers and labels dark for readability on light background */
+    h1, h2, h3, label {
+        color: #064e3b !important;
+    }
+    
+    /* Custom Green Button */
+    .stButton>button {
+        background-color: #10b981;
+        color: white;
+        border-radius: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONFIGURATION HUGGING FACE ---
+# --- HUGGING FACE CONFIGURATION ---
 REPO_ID = "Arthur-PREVEL/nanogpt-tinystories-depth24" 
 FILENAME = "ckpt.pt"
 
 @st.cache_resource
 def load_model_from_hf():
     try:
-        with st.spinner("Chargement du modèle depuis Hugging Face (218 Mo)..."):
-            # Téléchargement sécurisé via Hugging Face Hub
+        with st.spinner("Loading Artificial Intelligence..."):
+            # Secure download from Hugging Face Hub
             path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
-            
             checkpoint = torch.load(path, map_location='cpu')
+            
+            # Reconstruct config and model
             config = GPTConfig(**checkpoint['model_args'])
             model = GPT(config)
             
+            # Clean state_dict keys (removes torch.compile prefixes)
             state_dict = checkpoint['model']
-            # Nettoyage des préfixes 'compile'
             state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+            
             model.load_state_dict(state_dict)
             model.eval()
             return model
     except Exception as e:
-        st.error(f"Erreur lors du téléchargement depuis Hugging Face : {e}")
+        st.error(f"Hugging Face Error: {e}")
         return None
 
-# --- CHARGEMENT ---
+# Load model
 model = load_model_from_hf()
 
 if model is None:
-    st.warning("⚠️ Impossible de charger le modèle. Vérifiez la connexion à Hugging Face.")
     st.stop()
 
-# Chargement du dictionnaire meta.pkl (doit être sur ton GitHub)
+# Load meta.pkl for character mapping (must be in your GitHub repo)
 try:
     with open('meta.pkl', 'rb') as f:
         meta = pickle.load(f)
@@ -59,42 +96,48 @@ try:
     encode = lambda s: [stoi[c] for c in s if c in stoi]
     decode = lambda l: ''.join([itos[i] for i in l])
 except FileNotFoundError:
-    st.error("❌ Fichier 'meta.pkl' introuvable dans ton dépôt GitHub.")
+    st.error("❌ 'meta.pkl' not found in your GitHub repository!")
     st.stop()
 
-# --- INTERFACE UTILISATEUR ---
+# --- CHAT INTERFACE ---
 st.title("🟢 UiT nanoGPT Storyteller")
-st.caption("Architecture 24-layers | TinyStories Dataset | Par Arthur PREVEL")
+st.write("Exploring scaling laws on the TinyStories dataset (24-layer depth model).")
 
+# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Sidebar pour les réglages
+# Sidebar settings
 with st.sidebar:
-    st.header("Paramètres")
-    temp = st.slider("Créativité (Température)", 0.1, 1.2, 0.8)
-    max_t = st.slider("Longueur max (Tokens)", 50, 500, 200)
-    if st.button("🔄 Nouvelle discussion"):
+    st.header("Settings")
+    # Default temperature at 0.1 for maximum stability
+    temp = st.slider("Creativity (Temperature)", 0.1, 1.2, 0.1) 
+    max_t = st.slider("Story Length (Tokens)", 50, 500, 250)
+    if st.button("🔄 Reset Conversation"):
         st.session_state.messages = []
         st.rerun()
 
-# Affichage des messages
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Entrée du prompt
-if prompt := st.chat_input("Il était une fois..."):
+# User prompt input
+if prompt := st.chat_input("Once upon a time..."):
+    # Add user message to history
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # Generate assistant response
     with st.chat_message("assistant"):
-        with st.spinner("Génération..."):
+        with st.spinner("Writing the story..."):
+            # Encode input and generate from model
             context_ids = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
-            # Appel de la fonction de génération de ton modèle
+            # Using the generate function from your model.py
             output_ids = model.generate(context_ids, max_new_tokens=max_t, temperature=temp)[0].tolist()
             response = decode(output_ids)
             st.markdown(response)
     
+    # Save assistant response to history
     st.session_state.messages.append({"role": "assistant", "content": response})
