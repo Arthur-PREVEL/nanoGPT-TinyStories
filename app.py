@@ -1,236 +1,235 @@
 import streamlit as st
 import torch
 import pickle
+import time
+import datetime
 from huggingface_hub import hf_hub_download
 from model import GPTConfig, GPT
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 1. CONFIGURATION & STYLE
+# -----------------------------------------------------------------------------
+
 st.set_page_config(
-    page_title="NanoGPT Storyteller",
-    page_icon="📖",
-    layout="centered",
+    page_title="UiT nanoGPT Assistant", 
+    page_icon="✨", 
+    layout="centered"
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# CSS "Clean Interface" inspiré de Snowflake mais avec l'identité UiT
 st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:wght@400;600&display=swap');
+    <style>
+    /* Fond global très propre */
+    .stApp { background-color: #ffffff; }
+    
+    /* Suppression du padding haut pour un look 'App' */
+    .block-container { padding-top: 3rem; }
 
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    /* Style des bulles de chat */
+    .stChatMessage { 
+        padding: 1rem; 
+        border-radius: 12px; 
+        margin-bottom: 1rem; 
+    }
+    
+    /* Bulle Utilisateur : Vert UiT Professionnel */
+    [data-testid="stChatMessageUser"] { 
+        background-color: #059669; 
+    }
+    /* Texte utilisateur en blanc */
+    [data-testid="stChatMessageUser"] p { color: white !important; }
 
-.stApp { background-color: #f7f8fa; }
+    /* Bulle Assistant : Gris très léger (Style ChatGPT/Claude) */
+    [data-testid="stChatMessageAssistant"] { 
+        background-color: #f8fafc; 
+        border: 1px solid #e2e8f0;
+    }
+    /* Texte assistant en noir/gris foncé */
+    [data-testid="stChatMessageAssistant"] p { color: #1e293b !important; }
 
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background-color: #ffffff;
-    border-right: 1px solid #e5e7eb;
-}
-[data-testid="stSidebar"] h1,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 {
-    color: #111827 !important;
-    font-size: 0.75rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.08em !important;
-    text-transform: uppercase !important;
-    font-family: 'Inter', sans-serif !important;
-    margin-bottom: 0.75rem !important;
-}
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span {
-    color: #6b7280 !important;
-    font-size: 0.85rem !important;
-    font-family: 'Inter', sans-serif !important;
-}
-[data-testid="stSidebar"] hr { border-color: #f3f4f6 !important; margin: 1.25rem 0 !important; }
-
-[data-testid="stSlider"] > div > div > div { background-color: #4f46e5 !important; }
-
-/* ── Clear button ── */
-.stButton > button {
-    background-color: #ffffff !important;
-    color: #374151 !important;
-    border: 1px solid #d1d5db !important;
-    border-radius: 8px !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 0.83rem !important;
-    font-weight: 500 !important;
-    width: 100% !important;
-    padding: 8px 14px !important;
-}
-.stButton > button:hover {
-    background-color: #f3f4f6 !important;
-    border-color: #9ca3af !important;
-}
-
-/* ── Main area ── */
-.block-container { padding-top: 2.5rem !important; max-width: 720px !important; }
-
-h1 {
-    font-family: 'Lora', serif !important;
-    color: #111827 !important;
-    font-size: 1.65rem !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.02em !important;
-    margin-bottom: 0 !important;
-}
-
-/* ── Chat row ── */
-[data-testid="stChatMessage"] {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0.2rem 0 !important;
-    align-items: flex-start !important;
-    gap: 0.65rem !important;
-}
-
-/* ── User bubble ── */
-[data-testid="stChatMessageUser"] {
-    background-color: #4f46e5 !important;
-    border-radius: 18px 18px 4px 18px !important;
-    padding: 11px 16px !important;
-    border: none !important;
-    box-shadow: 0 1px 4px rgba(79,70,229,0.2) !important;
-}
-[data-testid="stChatMessageUser"] p,
-[data-testid="stChatMessageUser"] span {
-    color: #ffffff !important;
-    font-size: 0.93rem !important;
-    line-height: 1.65 !important;
-    font-family: 'Inter', sans-serif !important;
-}
-
-/* ── Assistant bubble ── */
-[data-testid="stChatMessageAssistant"] {
-    background-color: #ffffff !important;
-    border-radius: 4px 18px 18px 18px !important;
-    padding: 11px 16px !important;
-    border: 1px solid #e5e7eb !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06) !important;
-}
-[data-testid="stChatMessageAssistant"] p,
-[data-testid="stChatMessageAssistant"] span {
-    color: #1f2937 !important;
-    font-size: 0.93rem !important;
-    line-height: 1.75 !important;
-    font-family: 'Inter', sans-serif !important;
-}
-
-/* ── Chat input ── */
-[data-testid="stChatInputContainer"] {
-    background-color: #ffffff !important;
-    border: 1px solid #d1d5db !important;
-    border-radius: 14px !important;
-    padding: 2px 6px !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
-}
-[data-testid="stChatInputContainer"] textarea {
-    color: #111827 !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 0.93rem !important;
-    background: transparent !important;
-    caret-color: #4f46e5;
-}
-[data-testid="stChatInputContainer"] textarea::placeholder { color: #9ca3af !important; }
-[data-testid="stChatInputContainer"] button {
-    background-color: #4f46e5 !important;
-    border-radius: 8px !important;
-    border: none !important;
-}
-
-.stSpinner > div { border-top-color: #4f46e5 !important; }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 2px; }
-[data-testid="stAlert"] { border-radius: 8px !important; }
-</style>
+    /* Titres et Labels */
+    h1, h2, h3 { color: #064e3b !important; font-family: 'Helvetica', sans-serif; }
+    
+    /* Input field stylisé */
+    .stChatInput > div { border-color: #cbd5e1 !important; }
+    </style>
 """, unsafe_allow_html=True)
 
-# ── Model loading ─────────────────────────────────────────────────────────────
-REPO_ID  = "Arthur-PREVEL/nanogpt-tinystories-depth24"
+# -----------------------------------------------------------------------------
+# 2. CONSTANTES & DONNÉES
+# -----------------------------------------------------------------------------
+
+REPO_ID = "Arthur-PREVEL/nanogpt-tinystories-depth24" 
 FILENAME = "ckpt.pt"
 
+# Suggestions affichées au démarrage (Pills)
+SUGGESTIONS = {
+    "🐶 A dog named Max": "Once upon a time, there was a dog named Max who loved to...",
+    "🏰 The Magic Castle": "Lily found a secret door that led to a big, shining castle...",
+    "🍪 The Lost Cookie": "Tom was sad because he lost his favorite cookie in the...",
+    "🤖 The Happy Robot": "A little robot wanted to make friends, so he went to the...",
+}
+
+# -----------------------------------------------------------------------------
+# 3. CHARGEMENT DU MODÈLE (BACKEND)
+# -----------------------------------------------------------------------------
+
 @st.cache_resource
-def load_model():
+def load_resources():
     try:
-        with st.spinner("Loading model…"):
-            path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
-            checkpoint = torch.load(path, map_location="cpu")
-            config = GPTConfig(**checkpoint["model_args"])
-            model = GPT(config)
-            state_dict = {
-                k.replace("_orig_mod.", ""): v
-                for k, v in checkpoint["model"].items()
-            }
-            model.load_state_dict(state_dict)
-            model.eval()
-            return model
+        # Téléchargement & Chargement Modèle
+        path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
+        checkpoint = torch.load(path, map_location='cpu')
+        config = GPTConfig(**checkpoint['model_args'])
+        model = GPT(config)
+        
+        state_dict = checkpoint['model']
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict)
+        model.eval()
+
+        # Chargement Meta (Tokenization)
+        with open('meta.pkl', 'rb') as f:
+            meta = pickle.load(f)
+        
+        return model, meta['stoi'], meta['itos']
     except Exception as e:
-        st.error(f"Failed to load model: {e}")
-        return None
+        return None, None, None
 
-model = load_model()
-if model is None:
-    st.stop()
+model, stoi, itos = load_resources()
 
-try:
-    with open("meta.pkl", "rb") as f:
-        meta = pickle.load(f)
-    stoi, itos = meta["stoi"], meta["itos"]
+# Helpers pour encoder/decoder
+if stoi and itos:
     encode = lambda s: [stoi[c] for c in s if c in stoi]
-    decode = lambda l: "".join([itos[i] for i in l])
-except FileNotFoundError:
-    st.error("`meta.pkl` not found. Make sure it is present in the working directory.")
+    decode = lambda l: ''.join([itos[i] for i in l])
+else:
+    st.error("Erreur critique: Impossible de charger le modèle ou meta.pkl")
     st.stop()
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### Settings")
-    temp  = st.slider("Temperature", 0.1, 1.2, 0.1, step=0.05,
-                      help="Higher = more creative. Lower = more focused.")
-    max_t = st.slider("Max tokens", 50, 500, 250, step=25,
-                      help="Maximum number of characters to generate.")
-    st.markdown("---")
-    if st.button("↺  Clear conversation"):
-        st.session_state.messages = []
-        st.rerun()
-    st.markdown("---")
-    st.markdown(
-        "<p style='font-size:0.75rem;color:#9ca3af;line-height:1.6'>"
-        "Depth-24 Transformer<br>Character-level · TinyStories</p>",
-        unsafe_allow_html=True,
-    )
+# -----------------------------------------------------------------------------
+# 4. FONCTIONS UTILITAIRES UI
+# -----------------------------------------------------------------------------
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.title("NanoGPT Storyteller")
-st.markdown(
-    "<p style='color:#6b7280;font-size:0.88rem;margin-top:-4px;margin-bottom:28px'>"
-    "Give a story opening — the model will continue it.</p>",
-    unsafe_allow_html=True,
-)
+def clear_conversation():
+    st.session_state.messages = []
+    st.session_state.selected_suggestion = None
 
-# ── Chat ──────────────────────────────────────────────────────────────────────
+@st.dialog("Project Disclaimers")
+def show_disclaimer():
+    st.write("### INF-3600 Project Info")
+    st.caption("""
+    This AI assistant uses a **24-layer Transformer** trained from scratch on the **TinyStories** dataset.
+    
+    * **Capabilities:** Generates simple narratives with coherent structure.
+    * **Limitations:** May exhibit hallucinations or grammatical loops typical of small language models (18M params).
+    * **Privacy:** No data is stored externally. Everything runs in ephemeral memory.
+    
+    *Author: Arthur PREVEL - UiT The Arctic University of Norway*
+    """)
+
+# Simulation de streaming pour l'effet visuel "Claude/ChatGPT"
+def stream_text(full_text):
+    for word in full_text.split(" "):
+        yield word + " "
+        time.sleep(0.02) # Vitesse d'écriture
+
+# -----------------------------------------------------------------------------
+# 5. INTERFACE PRINCIPALE
+# -----------------------------------------------------------------------------
+
+# Initialisation de l'état
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Passing emoji as avatar= replaces the Material icon entirely — no overlap
-for msg in st.session_state.messages:
-    avatar = "🧑" if msg["role"] == "user" else "📖"
-    with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
+# --- HEADER ---
+# On affiche un header différent si c'est la page d'accueil ou si le chat est actif
+has_history = len(st.session_state.messages) > 0
 
-if prompt := st.chat_input("Once upon a time…"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar="🧑"):
-        st.markdown(prompt)
+if has_history:
+    col1, col2 = st.columns([6, 1])
+    col1.title("🟢 nanoGPT Assistant")
+    col2.button("Restart", icon="🔄", on_click=clear_conversation, use_container_width=True)
+else:
+    # Grand logo pour l'état vide
+    st.markdown("<div style='text-align: center; margin-bottom: 2rem; font-size: 4rem;'>✨</div>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>How can I help you write today?</h1>", unsafe_allow_html=True)
 
-    with st.chat_message("assistant", avatar="📖"):
-        with st.spinner("Generating…"):
-            context  = torch.tensor(encode(prompt), dtype=torch.long)[None, ...]
-            output   = model.generate(context, max_t, temperature=temp)[0].tolist()
-            response = decode(output)
-            st.markdown(response)
+# --- ZONE D'AFFICHAGE DU CHAT ---
+if has_history:
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    st.session_state.messages.append({"role": "assistant", "content": response})
+# --- INPUT & LOGIQUE DE DÉMARRAGE ---
+
+# Gestion des suggestions (Pills)
+user_prompt = None
+selected_suggestion = None
+
+# Si pas d'historique, on affiche les suggestions au milieu
+if not has_history:
+    st.write("") # Spacer
+    st.write("") 
+    
+    # Input field central
+    user_prompt = st.chat_input("Start a story...", key="main_input")
+    
+    # Suggestions sous l'input
+    selected_suggestion = st.pills(
+        "Try these examples:",
+        options=SUGGESTIONS.keys(),
+        selection_mode="single"
+    )
+    
+    # Bouton Disclaimer discret
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_c1, col_c2, col_c3 = st.columns([1, 2, 1])
+    with col_c2:
+        if st.button("ℹ️ Model Architecture & Info", type="tertiary", use_container_width=True):
+            show_disclaimer()
+
+# Si historique, l'input est géré par Streamlit automatiquement en bas, 
+# mais on doit récupérer la valeur si c'est un prompt "suivi"
+if has_history:
+    user_prompt = st.chat_input("Continue the story...")
+
+# --- LOGIQUE DE TRAITEMENT ---
+
+# Priorité : Input texte > Suggestion cliquée
+final_prompt = None
+if user_prompt:
+    final_prompt = user_prompt
+elif selected_suggestion and not has_history:
+    # Si on clique sur une pilule, on prend le texte associé
+    final_prompt = SUGGESTIONS[selected_suggestion]
+
+# Exécution
+if final_prompt:
+    # 1. Affichage User
+    st.session_state.messages.append({"role": "user", "content": final_prompt})
+    if not has_history:
+        st.rerun() # Pour rafraîchir l'interface et passer en mode "Chat"
+    else:
+        with st.chat_message("user"):
+            st.markdown(final_prompt)
+
+    # 2. Génération Bot
+    with st.chat_message("assistant"):
+        with st.spinner("Generating narrative structure..."):
+            # Encodage
+            context_ids = torch.tensor(encode(final_prompt), dtype=torch.long)[None, ...]
+            
+            # Génération (Temperature basse pour la démo clean)
+            output_ids = model.generate(context_ids, max_new_tokens=300, temperature=0.2)[0].tolist()
+            full_response = decode(output_ids)
+            
+            # Affichage en streaming
+            response_placeholder = st.empty()
+            streamed_text = ""
+            for chunk in stream_text(full_response):
+                streamed_text += chunk
+                response_placeholder.markdown(streamed_text + "▌")
+            
+            response_placeholder.markdown(full_response)
+    
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
